@@ -1,0 +1,19 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress
+  namespace: default
+spec:
+  mode: one
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      app: service-c
+  stressors:
+    cpu:
+      workers: 2
+      load: 80
+  duration: "60s"
+  scheduler:
+    cron: "@every 10m"

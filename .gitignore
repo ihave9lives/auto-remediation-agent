@@ -1,0 +1,74 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Build artifacts
+target/
+*.wasm
+dist/
+build/
+*.egg-info/
+
+# Docker
+docker-compose.override.yml
+
+# Secrets
+.env
+*.key
+*.pem
+*.crt
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# Data
+data/
+*.db
+*.sqlite
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# IDE/Editor
+.project
+.classpath
+.settings/
+*.iml
+
+# Rust
+Cargo.lock
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

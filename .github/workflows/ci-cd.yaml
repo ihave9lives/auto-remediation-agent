@@ -1,0 +1,310 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Lint and test all components
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Setup Rust for watchdog
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Cache Rust dependencies
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            watchdog/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # Lint watchdog
+      - name: Lint watchdog
+        run: |
+          cd watchdog
+          cargo fmt --check
+          cargo clippy -- -D warnings
+
+      # Test watchdog
+      - name: Test watchdog
+        run: |
+          cd watchdog
+          cargo test --release
+
+      # Setup Python for agent
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # Install agent dependencies
+      - name: Install agent dependencies
+        run: |
+          cd agent
+          pip install -e .[dev]
+
+      # Lint agent
+      - name: Lint agent
+        run: |
+          cd agent
+          python -m ruff check .
+          python -m mypy .
+
+      # Test agent
+      - name: Test agent
+        run: |
+          cd agent
+          python -m pytest tests/ -v --cov=agent --cov-report=xml
+
+      # Validate docker-compose
+      - name: Validate docker-compose
+        run: docker-compose config -q
+
+  # Build and push Docker images
+  build-images:
+    needs: lint-and-test
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for watchdog
+        id: meta-watchdog
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/watchdog
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push watchdog
+        uses: docker/build-push-action@v5
+        with:
+          context: ./watchdog
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta-watchdog.outputs.tags }}
+          labels: ${{ steps.meta-watchdog.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract metadata for agent
+        id: meta-agent
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/agent
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push agent
+        uses: docker/build-push-action@v5
+        with:
+          context: ./agent
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta-agent.outputs.tags }}
+          labels: ${{ steps.meta-agent.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract metadata for service-a
+        id: meta-service-a
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/service-a
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push service-a
+        uses: docker/build-push-action@v5
+        with:
+          context: ./mock-services/service-a
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta-service-a.outputs.tags }}
+          labels: ${{ steps.meta-service-a.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract metadata for service-b
+        id: meta-service-b
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/service-b
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push service-b
+        uses: docker/build-push-action@v5
+        with:
+          context: ./mock-services/service-b
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta-service-b.outputs.tags }}
+          labels: ${{ steps.meta-service-b.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract metadata for service-c
+        id: meta-service-c
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/service-c
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push service-c
+        uses: docker/build-push-action@v5
+        with:
+          context: ./mock-services/service-c
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta-service-c.outputs.tags }}
+          labels: ${{ steps.meta-service-c.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Integration test with docker-compose
+  integration-test:
+    needs: build-images
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Start stack
+        run: |
+          docker-compose up -d
+          sleep 30  # Wait for services to be ready
+
+      - name: Run health checks
+        run: |
+          for i in {1..10}; do
+            if curl -sf localhost:8081/health && curl -sf localhost:8082/health && curl -sf localhost:8083/health; then
+              echo "All services healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Services failed to become healthy"
+          docker-compose logs
+          exit 1
+
+      - name: Test watchdog detection
+        run: |
+          # Inject failure and verify watchdog detects it
+          curl -X POST localhost:8081/chaos/failure-rate -H "Content-Type: application/json" -d '{"rate": 0.5}'
+          sleep 10
+          # Check watchdog logs for incident
+          docker-compose logs watchdog | grep -i "anomaly detected" || true
+
+      - name: Test agent endpoint
+        run: |
+          curl -X POST localhost:8080/incidents \
+            -H "Content-Type: application/json" \
+            -d '{"service": "service-a", "anomaly_type": "error_rate_spike", "severity": "warning", "confidence": 0.8}'
+
+      - name: Cleanup
+        if: always()
+        run: docker-compose down -v
+
+  # Security scanning
+  security-scan:
+    needs: build-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+
+  # Release
+  release:
+    needs: [integration-test, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          # Get version from git tags or use date-based
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || date +%Y.%m.%d-%H%M)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false

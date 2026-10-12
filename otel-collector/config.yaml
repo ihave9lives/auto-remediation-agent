@@ -1,0 +1,129 @@
+# OpenTelemetry Collector Configuration for Autonomous Remediation Agent
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'mock-services'
+          static_configs:
+            - targets: ['service-a:8080', 'service-b:8080', 'service-c:8080']
+        - job_name: 'otel-collector'
+          static_configs:
+            - targets: ['localhost:8888']
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1000
+    send_batch_max_size: 2000
+
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  tail_sampling:
+    decision_wait: 30s
+    num_traces: 50000
+    expected_new_traces_per_sec: 10000
+    policies:
+      - name: errors-only
+        type: string_attribute
+        string_attribute:
+          key: status_code
+          values: ["ERROR"]
+      - name: slow-traces
+        type: latency
+        latency:
+          threshold_ms: 1000
+      - name: probabilistic
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+  # Transform processor for attribute normalization
+  transform:
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["service.name"], attributes["k8s.pod.name"]) where attributes["k8s.pod.name"] != nil
+          - set(attributes["deployment"], attributes["k8s.deployment.name"]) where attributes["k8s.deployment.name"] != nil
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(attributes["service"], resource.attributes["service.name"]) where resource.attributes["service.name"] != nil
+
+  # Resource detection for K8s
+  resourcedetection:
+    detectors: [env, gce, ec2, azure, system]
+    timeout: 5s
+
+  # Span to metric for RED metrics
+  spanmetrics:
+    metrics_exporter: prometheus
+    latency_histogram_buckets: [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+    dimensions:
+      - name: http.method
+        default: "UNKNOWN"
+      - name: http.status_code
+        default: "UNKNOWN"
+      - name: http.route
+        default: "UNKNOWN"
+
+exporters:
+  clickhouse:
+    endpoint: "tcp://clickhouse:9000"
+    database: "otel"
+    username: "${CLICKHOUSE_USER}"
+    password: "${CLICKHOUSE_PASSWORD}"
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: "auto_remediation"
+    const_labels:
+      cluster: "local-dev"
+      environment: "development"
+
+  prometheusremotewrite:
+    endpoint: "http://prometheus:9090/api/v1/write"
+    tls:
+      insecure: true
+
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    labels:
+      service: "${service.name}"
+      namespace: "${k8s.namespace.name}"
+    timeout: 10s
+
+  debug:
+    verbosity: detailed
+
+service:
+  extensions: [health_check, pprof, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, tail_sampling, transform, resourcedetection, spanmetrics]
+      exporters: [clickhouse, debug]
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch, transform, resourcedetection, spanmetrics]
+      exporters: [prometheus, prometheusremotewrite, debug]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, transform, resourcedetection]
+      exporters: [loki, debug]
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888

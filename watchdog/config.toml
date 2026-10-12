@@ -1,0 +1,21 @@
+[prometheus]
+url = "http://prometheus:9090"
+scrape_interval_secs = 15
+query_timeout_secs = 30
+
+[clickhouse]
+url = "tcp://clickhouse:9000"
+database = "otel"
+username = "default"
+password = ""
+
+[detection]
+window_secs = 300
+zscore_threshold = 3.0
+ewma_alpha = 0.3
+entropy_threshold = 2.5
+min_samples = 20
+
+[output]
+clickhouse_table = "incidents"
+webhook_url = "http://agent:8080/incidents"
